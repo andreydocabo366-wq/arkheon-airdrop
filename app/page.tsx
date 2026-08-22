@@ -1,10 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { init, isTMA, miniApp, themeParams, viewport } from "@tma.js/sdk-react";
+import { init, isTMA, miniApp, retrieveRawInitData, themeParams, viewport } from "@tma.js/sdk-react";
+import {
+  authenticateTelegram,
+  fetchSaudiRanking,
+  type AuthSnapshot,
+  type LiveRankingEntry,
+} from "./lib/api-client";
 
 type Locale = "ar" | "en";
 type View = "home" | "explore" | "saved" | "ranking" | "profile";
+type AuthState =
+  | { status: "demo" | "connecting" | "unavailable"; snapshot: null }
+  | { status: "authenticated"; snapshot: AuthSnapshot };
+type RankingState =
+  | { status: "demo" | "loading"; entries: LiveRankingEntry[] }
+  | { status: "live"; entries: LiveRankingEntry[] };
 type IconName =
   | "home"
   | "search"
@@ -167,6 +179,11 @@ const copy = {
     safetyCenter: "مركز الأمان",
     notifications: "الإشعارات",
     comingSoon: "قريبًا مع الحساب الآمن",
+    connectingSecurely: "جارٍ التحقق الآمن عبر تيليغرام",
+    secureAccount: "حساب تيليغرام موثّق",
+    secureUnavailable: "الوضع التجريبي نشط حتى إعداد الخادم الآمن",
+    liveRanking: "ترتيب حقيقي من السجل الموثوق، بدون بيانات وهمية.",
+    liveRankingEmpty: "لا توجد نقاط موثقة في الترتيب بعد.",
     back: "رجوع",
     noResults: "لا توجد نتائج مطابقة.",
   },
@@ -231,6 +248,11 @@ const copy = {
     safetyCenter: "Safety center",
     notifications: "Notifications",
     comingSoon: "Coming with secure accounts",
+    connectingSecurely: "Verifying securely with Telegram",
+    secureAccount: "Verified Telegram account",
+    secureUnavailable: "Demo mode remains active until the secure backend is configured",
+    liveRanking: "Live ranking from the trusted ledger, with no fabricated entries.",
+    liveRankingEmpty: "No verified points have entered the ranking yet.",
     back: "Back",
     noResults: "No matching opportunities.",
   },
@@ -540,49 +562,68 @@ function SavedView({
   );
 }
 
-function RankingView({ locale }: { locale: Locale }) {
+function RankingView({ locale, ranking }: { locale: Locale; ranking: RankingState }) {
   const t = copy[locale];
-  const leaders = [
+  const demoLeaders = [
     { rank: "01", name: locale === "ar" ? "مستكشف ٠٠١" : "Explorer 001", points: "2,480" },
     { rank: "02", name: locale === "ar" ? "مستكشف ٠٠٢" : "Explorer 002", points: "2,210" },
     { rank: "03", name: locale === "ar" ? "مستكشف ٠٠٣" : "Explorer 003", points: "1,970" },
     { rank: "04", name: locale === "ar" ? "مستكشف ٠٠٤" : "Explorer 004", points: "1,640" },
   ];
+  const isLive = ranking.status === "live";
+  const leaders = isLive
+    ? ranking.entries.map((entry) => ({
+        rank: entry.rank.toString().padStart(2, "0"),
+        name: entry.displayName,
+        points: entry.points.toLocaleString(locale === "ar" ? "ar-SA" : "en-US"),
+      }))
+    : demoLeaders;
   return (
     <section className="page-view">
-      <div className="page-heading"><span className="eyebrow">SAUDI ARABIA · DEMO</span><h1>{t.rankingTitle}</h1><p>{t.rankingSub}</p></div>
+      <div className="page-heading"><span className="eyebrow">SAUDI ARABIA · {isLive ? "LIVE" : "DEMO"}</span><h1>{t.rankingTitle}</h1><p>{isLive ? t.liveRanking : t.rankingSub}</p></div>
       <div className="ranking-hero">
         <div className="ranking-orb"><Icon name="ranking" size={30} /></div>
-        <span>{t.demo}</span><strong>TOP 100</strong><small>SAUDI ARABIA</small>
+        <span>{isLive ? "LIVE" : t.demo}</span><strong>TOP 100</strong><small>SAUDI ARABIA</small>
       </div>
-      <div className="leader-list">
-        {leaders.map((leader, index) => (
-          <div className="leader-row" key={leader.rank}>
-            <strong className={`rank-number rank-${index + 1}`}>{leader.rank}</strong>
-            <span className="leader-avatar">{leader.name.slice(-1)}</span>
-            <div><strong>{leader.name}</strong><span>{t.demo}</span></div>
-            <p><strong>{leader.points}</strong><span>{t.points}</span></p>
-          </div>
-        ))}
-      </div>
+      {leaders.length ? (
+        <div className="leader-list">
+          {leaders.map((leader, index) => (
+            <div className="leader-row" key={`${leader.rank}-${leader.name}`}>
+              <strong className={`rank-number rank-${index + 1}`}>{leader.rank}</strong>
+              <span className="leader-avatar">{leader.name.slice(-1)}</span>
+              <div><strong>{leader.name}</strong><span>{isLive ? "ARKHÉON Points" : t.demo}</span></div>
+              <p><strong>{leader.points}</strong><span>{t.points}</span></p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state"><span className="empty-icon"><Icon name="ranking" size={27} /></span><strong>{t.liveRankingEmpty}</strong></div>
+      )}
       <div className="info-card"><Icon name="shield" size={20} /><p>{t.pointsNote}</p></div>
     </section>
   );
 }
 
-function ProfileView({ locale, setLocale }: { locale: Locale; setLocale: (locale: Locale) => void }) {
+function ProfileView({ locale, setLocale, auth }: { locale: Locale; setLocale: (locale: Locale) => void; auth: AuthState }) {
   const t = copy[locale];
+  const connected = auth.status === "authenticated";
+  const profile = connected ? auth.snapshot : null;
+  const profileStatus = auth.status === "connecting"
+    ? t.connectingSecurely
+    : connected
+      ? t.secureAccount
+      : t.secureUnavailable;
   return (
     <section className="page-view">
-      <div className="page-heading"><span className="eyebrow">TELEGRAM · DEMO</span><h1>{t.profileTitle}</h1><p>{t.comingSoon}</p></div>
+      <div className="page-heading"><span className="eyebrow">TELEGRAM · {connected ? "VERIFIED" : "DEMO"}</span><h1>{t.profileTitle}</h1><p>{profileStatus}</p></div>
       <div className="profile-card">
         <div className="profile-avatar"><LogoMark /></div>
-        <div><strong>{t.telegramUser}</strong><span>@telegram_user · {t.demo}</span></div>
+        <div><strong>{profile?.user.displayName ?? t.telegramUser}</strong><span>{profile?.user.username ? `@${profile.user.username}` : connected ? t.secureAccount : `@telegram_user · ${t.demo}`}</span></div>
         <em>{t.memberStatus}</em>
       </div>
       <div className="profile-stats">
-        <div><strong>—</strong><span>{t.points}</span></div>
-        <div><strong>0</strong><span>{t.referrals}</span></div>
+        <div><strong>{profile?.points ?? "—"}</strong><span>{t.points}</span></div>
+        <div><strong>{profile?.referrals ?? 0}</strong><span>{t.referrals}</span></div>
         <div><strong>0</strong><span>{t.started}</span></div>
       </div>
       <div className="settings-list">
@@ -702,8 +743,11 @@ export default function Home() {
   const [activeView, setActiveView] = useState<View>("home");
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
   const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [auth, setAuth] = useState<AuthState>({ status: "demo", snapshot: null });
+  const [ranking, setRanking] = useState<RankingState>({ status: "demo", entries: [] });
 
   useEffect(() => {
+    let cancelled = false;
     const savedLocale = window.localStorage.getItem("arkheon-locale");
     const savedCampaigns = window.localStorage.getItem("arkheon-saved-demo");
     queueMicrotask(() => {
@@ -722,7 +766,40 @@ export default function Home() {
         viewport.bindCssVars();
         viewport.expand();
       }).catch(() => undefined);
+
+      try {
+        const initData = retrieveRawInitData();
+        if (initData) {
+          queueMicrotask(() => {
+            if (!cancelled) setAuth({ status: "connecting", snapshot: null });
+          });
+          void authenticateTelegram(initData)
+            .then((snapshot) => {
+              if (!cancelled) setAuth({ status: "authenticated", snapshot });
+            })
+            .catch(() => {
+              if (!cancelled) setAuth({ status: "unavailable", snapshot: null });
+            });
+        }
+      } catch {
+        queueMicrotask(() => {
+          if (!cancelled) setAuth({ status: "unavailable", snapshot: null });
+        });
+      }
     }
+
+    queueMicrotask(() => {
+      if (!cancelled) setRanking({ status: "loading", entries: [] });
+    });
+    void fetchSaudiRanking()
+      .then((entries) => {
+        if (!cancelled) setRanking({ status: "live", entries });
+      })
+      .catch(() => {
+        if (!cancelled) setRanking({ status: "demo", entries: [] });
+      });
+
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -759,8 +836,8 @@ export default function Home() {
               {activeView === "home" && <HomeView locale={locale} onExplore={() => switchView("explore")} onOpen={setSelectedCampaign} onSave={toggleSaved} savedIds={savedIds} />}
               {activeView === "explore" && <ExploreView locale={locale} onOpen={setSelectedCampaign} onSave={toggleSaved} savedIds={savedIds} />}
               {activeView === "saved" && <SavedView locale={locale} onExplore={() => switchView("explore")} onOpen={setSelectedCampaign} onSave={toggleSaved} savedIds={savedIds} />}
-              {activeView === "ranking" && <RankingView locale={locale} />}
-              {activeView === "profile" && <ProfileView locale={locale} setLocale={setLocale} />}
+              {activeView === "ranking" && <RankingView locale={locale} ranking={ranking} />}
+              {activeView === "profile" && <ProfileView auth={auth} locale={locale} setLocale={setLocale} />}
             </>
           )}
         </div>
