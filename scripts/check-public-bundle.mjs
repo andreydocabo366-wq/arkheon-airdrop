@@ -11,6 +11,11 @@ const forbiddenTerms = [
   "LARI Orchestrator",
   "Policy Engine",
   "Signer Service",
+  "TELEGRAM_BOT_TOKEN",
+  "DATABASE_URL",
+  "SESSION_TTL_SECONDS",
+  "token_hash",
+  "init_data_hash",
 ];
 
 const textExtensions = new Set([".css", ".html", ".js", ".json", ".map", ".txt"]);
@@ -29,6 +34,7 @@ async function filesIn(directory) {
 const matches = [];
 const distPath = fileURLToPath(new URL("../dist", import.meta.url));
 for (const path of await filesIn(distPath)) {
+  if (path.includes(`${join("dist", "server")}`)) continue;
   const content = await readFile(path, "utf8");
   for (const term of forbiddenTerms) {
     if (content.toLocaleLowerCase("en").includes(term.toLocaleLowerCase("en"))) {
